@@ -1,0 +1,88 @@
+# ===== 环境 / 工具（reasonix 等本地助手）=====
+.reasonix/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+!.env.example
+
+# 依赖与打包
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+.installed.cfg
+
+# 测试 / 质量工具缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache/
+.hypothesis/
+
+# Jupyter Notebook 输出
+.ipynb_checkpoints/
+
+# ===== Node / 前端（Vue / React / Vite 等）=====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.lerna/
+
+# 前端构建产物
+dist/
+dist-ssr/
+*.local
+
+# 编辑器 / IDE 本地目录与生成文件
+.vite/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ===== 日志 / 临时文件 =====
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+*~
+
+# ===== 操作系统文件 =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ===== 数据库 / 上传等运行时文件（按需启用）=====
+*.sqlite3
+*.db
+uploads/
+media/
+static/uploads/
