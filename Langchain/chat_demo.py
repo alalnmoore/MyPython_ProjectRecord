@@ -1,6 +1,8 @@
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+
+from Langchain.moudel import SentimentResult
 from Langchain.tools import get_weather_message
 import os
 
@@ -58,7 +60,7 @@ def tools_llm_call():
     message = [(HumanMessage(content="北京的天气如何？？"))]
     # 这个大模型返回工具要执行的动作，也就是说，大模型将参数传给工具，委托工具去帮我执行，执行完后将结果给我！！
     response = llm_with_tools.invoke(message)
-    print(response.tool_calls)
+    print(response.tool_calls)  # 内容是一个列表，列表中的每个元素是一个字典
     message.append(response)
     for tool_call in response.tool_calls:
         # 取出工具的名称以及参数
@@ -73,6 +75,23 @@ def tools_llm_call():
             content = final_result.content
             print(content)
 
+# 结构化输出的方法
+def structured_output():
+    llm = ChatOpenAI(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key=os.getenv("Alibaba_Key"),
+        model="qwen-plus"
+    )
+    structured_output_llm = llm.with_structured_output(SentimentResult)
+    question = [HumanMessage(content="这家餐厅的菜太难吃了，服务也差，再也不来了")]
+    # 输出的response类型是model中定义的SentimentResult类型，不能用.content方法
+    response = structured_output_llm.invoke(question)
+    print(response)
+    print(type(response))
+    print(f"情感倾向: {response.sentiment}")
+    print(f"强烈程度: {response.score}")
+    print(f"关键词: {response.keywords}")
+
 
 # main方法运行
 if __name__ == "__main__":
@@ -80,5 +99,5 @@ if __name__ == "__main__":
     # 运行有提示词模板的方法
     # user_template_message()
     # user_template_message_another()
-    tools_llm_call()
-
+    # tools_llm_call()
+    structured_output()
