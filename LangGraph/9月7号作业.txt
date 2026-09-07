@@ -1,0 +1,152 @@
+作业背景
+公司有一个简单的报销审批流程。员工提交报销申请后，系统先解析用户输入中的报销金额和报销原因，再根据金额判断是否需要人工审批：
+
+报销金额 <= 1000：系统自动审批通过。
+报销金额 > 1000：流程进入人工审批节点，等待人工输入 approved 或 rejected。
+人工审批完成后，流程从中断位置恢复执行，并生成最终处理结果。
+
+本作业要求使用 FastAPI 提供 HTTP 接口，使用 LangGraph 编排流程
+
+流程要求
+请使用 LangGraph 实现如下流程：
+
+START
+  -> parse_expense
+  -> 条件边
+      amount <= 1000: process_expense
+      amount > 1000: wait_review
+  -> process_expense
+  -> END
+State 设计要求
+请定义一个State类，用于保存流程执行过程中的核心数据。 至少包含以下字段：
+
+class OverAllState(TypedDict, total=False):
+    amount: float | None
+    reason: str | None
+    need_review: bool | None
+    review_result: str | None
+    process_status: str | None
+    process_result: str | None
+节点要求
+1. parse_expense 节点
+parse_expense 节点负责从用户输入中提取报销金额和报销原因，并写入 OverAllState。
+
+要求：
+
+使用 ChatOpenAI 对用户输入进行处理。
+从请求中获取 amount 和 reason。
+判断是否需要人工审核。
+如果 amount > 1000，则设置 need_review = true。
+如果 amount <= 1000，则设置 need_review = false。
+将 amount、reason、need_review 写入 OverAllState。
+2. 条件边
+请在 parse_expense 节点后添加条件边。
+
+规则：
+
+如果 need_review == false，进入 process_expense 节点。
+如果 need_review == true，进入 wait_review 节点。
+3. wait_review 节点
+wait_review 节点负责人机协同审批。
+
+首次进入该节点时，流程需要中断，并返回给前端一条人工审批提示消息。
+
+要求：
+
+使用 LangGraph 的中断机制实现 HIL（Human In The Loop）。
+中断时返回如下结构：
+{
+  "type": "interrupt",
+  "message": "报销原因 + 报销金额 + 提示输入 approved 或 rejected"
+}
+提示内容中需要包含报销金额和报销原因。
+用户恢复执行时，需要使用同一个 threadId。
+恢复执行时，将用户输入的 resume 写入 review_result。
+review_result 只允许是 approved 或 rejected。
+人工审批完成后，流程继续进入 process_expense 节点。
+4. process_expense 节点
+process_expense 节点负责生成最终处理结果。
+
+要求：
+
+读取 need_review。
+如果不需要人工审核，则最终结果为自动通过。
+如果需要人工审核，则读取 review_result。
+如果 review_result == "approved"，最终结果为人工审批通过。
+如果 review_result == "rejected"，最终结果为拒绝。
+写入 process_status 和 process_result。
+状态值要求：
+
+场景	process_status
+低金额自动通过	AUTO_APPROVED
+高金额人工审批通过	MANUAL_APPROVED
+高金额人工审批拒绝	REJECTED
+FastAPI 接口要求
+请提供如下接口：
+
+POST /api/state-graph/expense/chat
+Content-Type: application/json
+请求模型
+请定义 ExpenseChatRequest：
+
+class ExpenseChatRequest(BaseModel):
+    threadId: str
+    amount: float | None = None
+    reason: str | None = None
+    resume: str | None = None
+字段说明：
+
+
+| 字段名 | 类型 | 说明 |
+| --- | --- | --- |
+| `threadId` | `str` | LangGraph 线程 ID，用于保存和恢复同一条流程 |
+| `amount` | `float | None` | 报销金额。第一次请求时传入，恢复审批时可以为 `null` |
+| `reason` | `str | None` | 报销原因。第一次请求时传入，恢复审批时可以为 `null` |
+| `resume` | `str | None` | 人工审批结果。第一次请求为 `null`，恢复执行时传入 `approved` 或 `rejected` |
+### 响应方式
+
+接口返回 `text/event-stream`，使用 SSE 流式输出。
+
+SSE 的 `data` 字段规则：
+
+- 除了中断节点和最终处理节点，其他节点只返回 `type` 和 `node`。
+- 中断节点返回 `type`、`node`、`message`，其中 `message` 是人工审批提示。
+- 最终处理节点 `process_expense` 返回 `type`、`node`、`message`，其中 `message` 是最终处理结果。
+- 流程正常结束后返回 `done` 事件。
+
+普通节点事件：
+
+```json
+{
+  "type": "node",
+  "node": "parse_expense"
+}
+```
+
+中断事件：
+
+```json
+{
+  "type": "interrupt",
+  "node": "wait_review",
+  "message": "该报销金额较高，需要人工审批。金额：2800.0，原因：参加 Java 培训。请输入 approved 或 rejected"
+}
+```
+
+最终处理节点事件：
+
+```json
+{
+  "type": "node",
+  "node": "process_expense",
+  "message": "报销申请已通过人工审批，进入财务打款流程。金额：2800.0，原因：参加 Java 培训"
+}
+```
+
+结束事件：
+
+```json
+{
+  "type": "done"
+}
+```
