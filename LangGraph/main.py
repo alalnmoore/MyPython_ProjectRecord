@@ -22,7 +22,7 @@ def order(req:RunRequest):
 
         for node in compiled_order_graph.stream(graph_input,config):
             if "__interrupt__" in node:
-            # 拿到node这个字典中的interrupt键所对的值，是一个列表
+            # 拿到node这个字典中的interrupt键所对的值，是一个列表,列表中的第一个元素就是一个对象,里面有value属性
                 interrupt = node["__interrupt__"][0]
                 value = interrupt.value
                 payload = json.dumps({"type": "interrupt", "question": value}, ensure_ascii=False)
