@@ -16,6 +16,7 @@ app = FastAPI()
 # 构建向量数据库接口
 @app.post("/api/rag/build")
 def rag_build():
+    # 是当前文件夹下的相对路径！但是不用写当前文件夹的名字
     loader = TextLoader("作业文档素材/新生图书馆咨询助手.md", encoding="utf-8")
     # 转换为document对象
     documents = loader.load()
