@@ -153,7 +153,10 @@ def text_to_image_flow():
         output_format=output_format, n=n,
     )
     for i, img in enumerate(images):
-        out = OUTPUT_DIR / f"t2i_{i + 1}.{output_format}"
+        out = OUTPUT_DIR / client.generate_filename(
+            mode="t2i", model=model, size=size,
+            quality=quality, ext=output_format, index=i if n > 1 else 0,
+        )
         client.save(img, out)
         print(f"✅ 已保存: {out}")
 
@@ -211,7 +214,10 @@ def image_to_image_flow():
         output_format=output_format, n=n,
     )
     for i, img in enumerate(images):
-        out = OUTPUT_DIR / f"i2i_{i + 1}.{output_format}"
+        out = OUTPUT_DIR / client.generate_filename(
+            mode="i2i", model=model, size=size,
+            quality=quality, ext=output_format, index=i if n > 1 else 0,
+        )
         client.save(img, out)
         print(f"✅ 已保存: {out}")
 

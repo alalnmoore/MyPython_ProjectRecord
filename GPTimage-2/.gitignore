@@ -24,11 +24,5 @@ env/
 .DS_Store
 Thumbs.db
 
-# 输出产物
-output/
-*.png
-!refs/.gitkeep
-!output/.gitkeep
-
 # 日志
 *.log

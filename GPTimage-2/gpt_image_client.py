@@ -28,6 +28,8 @@ import os
 import base64
 import json
 import sys
+import re
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -93,42 +95,42 @@ def _call_with_progress(label: str, func: Callable[..., T], *args, **kwargs) -> 
     thread.start()
 
     start_perf = time.perf_counter()  # 单调时钟,用于精确计时
-    start_wall = time.time()
 
-    # 起始行
-    print(f"\n⏳  {_ANSI['bold']}{label}{_ANSI['reset']}")
-    print(
-        f"   {_ANSI['dim']}开始于 {_now_str()},"
-        f"调用 {_ANSI['cyan']}{thread.name}{_ANSI['reset']}"
-        f"{_ANSI['dim']} (daemon 后台线程){_ANSI['reset']}"
-    )
+    # 终端宽度:进度条宽度自适应,最少 30、最多 50
+    try:
+        term_width = shutil.get_terminal_size().columns
+    except Exception:
+        term_width = 80
+    bar_width = max(30, min(50, term_width // 3))
+
+    # 起始:任务标签(单行)
+    print(f"\n⏳  {_ANSI['bold']}{label}{_ANSI['reset']}", flush=True)
 
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    last_print = 0
     tick = 0
 
     try:
         while thread.is_alive():
-            now_perf = time.perf_counter()
-            elapsed_ms = (now_perf - start_perf) * 1000
+            elapsed_ms = (time.perf_counter() - start_perf) * 1000
+            elapsed_s = elapsed_ms / 1000
 
-            # 每 500ms 打印一行新内容
-            if (now_perf - last_print) >= 0.5:
-                last_print = now_perf
-                spin_char = spinner[tick % len(spinner)]
-                now_str = _now_str()
+            spin_char = spinner[tick % len(spinner)]
+            # 进度条:每秒填 2 格,封顶 bar_width(30 格的进度条约 15 秒填满,
+            # 适合生图 50-90 秒的场景)
+            filled = min(bar_width, int(elapsed_s * 2))
+            bar = "█" * filled + "░" * (bar_width - filled)
 
-                # 整段拼一行:spinner + 时间戳 + 已等待
-                sys.stdout.write(
-                    f"   {_ANSI['cyan']}{spin_char}{_ANSI['reset']}  "
-                    f"{_ANSI['dim']}{now_str}{_ANSI['reset']}  "
-                    f"+{_ANSI['bold']}{elapsed_ms/1000:7.3f}s{_ANSI['reset']}  "
-                    f"{_ANSI['dim']}({int(elapsed_ms):>5d} ms){_ANSI['reset']}\n"
-                )
-                sys.stdout.flush()
-                tick += 1
+            # 单行 \r 刷新:spinner + 时间 + 进度条
+            line = (
+                f"\r{_ANSI['cyan']}{spin_char}{_ANSI['reset']}  "
+                f"+{_ANSI['bold']}{elapsed_s:5.1f}s{_ANSI['reset']}  "
+                f"{_ANSI['cyan']}[{bar}]{_ANSI['reset']}"
+            )
+            sys.stdout.write(line)
+            sys.stdout.flush()
 
-            time.sleep(0.05)
+            time.sleep(0.1)
+            tick += 1
     except KeyboardInterrupt:
         # 用户 Ctrl+C:等当前 IO 跑完再退出
         thread.join()
@@ -136,13 +138,16 @@ def _call_with_progress(label: str, func: Callable[..., T], *args, **kwargs) -> 
 
     thread.join()
 
-    # 完成行
+    # 完成:换行后打印总结(绿色 ✓ + 总耗时)
     total_ms = (time.perf_counter() - start_perf) * 1000
+    total_s = total_ms / 1000
+    final_bar = "█" * bar_width  # 完成时进度条全满
     sys.stdout.write(
-        f"   {_ANSI['green']}✓{_ANSI['reset']}  "
+        f"\r{_ANSI['green']}✓{_ANSI['reset']}  "
         f"{_ANSI['bold']}{_ANSI['green']}完成!{_ANSI['reset']}  "
-        f"总耗时 {_ANSI['bold']}{total_ms/1000:.3f}s{_ANSI['reset']}  "
-        f"{_ANSI['dim']}({int(total_ms)} ms){_ANSI['reset']}\n"
+        f"总耗时 {_ANSI['bold']}{total_s:.3f}s{_ANSI['reset']}  "
+        f"{_ANSI['dim']}({int(total_ms)} ms){_ANSI['reset']}  "
+        f"{_ANSI['cyan']}[{final_bar}]{_ANSI['reset']}\n"
     )
     sys.stdout.flush()
 
@@ -374,6 +379,44 @@ class GPTImageClient:
         return self._parse_json_response(resp)
 
     # --------------------------- 工具方法 ---------------------------------
+    @staticmethod
+    def generate_filename(
+        mode: str = "img",
+        model: str = "unknown",
+        size: str = "1024x1024",
+        quality: str = "medium",
+        ext: str = "png",
+        index: int = 0,
+        when: Optional["datetime"] = None,
+    ) -> str:
+        """
+        生成带时间戳的文件名,毫秒精度,绝不重复。
+
+        命名格式:
+            {mode}_{YYYYMMDD_HHMMSS}_{ms}_{model}_{size}_{quality}[_{idx}].{ext}
+
+        例:
+            t2i_20260909_202110_587_gpt-image-2.5-flare_1024x1024_medium.png
+            i2i_20260909_202111_123_gpt-image-2_2048x1152_high_2.png   ← 第 2 张
+
+        参数:
+            mode:  t2i (text-to-image) / i2i (image-to-image) / 任意字符串
+            model: 模型名,会自动清理非法字符
+            size:  1024x1024 等
+            quality: low / medium / high / auto
+            ext:   png / jpeg / webp
+            index: 同批次内的第几张(从 0 开始)。只有 >=1 时才追加 _N 后缀。
+            when:  自定义时间,默认当前时刻(测试用)。
+        """
+        ts = when or datetime.now()
+        date_part = ts.strftime("%Y%m%d_%H%M%S")
+        ms_part = f"{ts.microsecond // 1000:03d}"  # 微秒取前 3 位 = 毫秒
+        # 模型名安全化:把路径分隔符和 Windows 不允许的字符替换成 -
+        safe_model = re.sub(r"[<>:\"/\\|?*\s]", "-", model) if model else "unknown"
+        safe_model = re.sub(r"-+", "-", safe_model).strip("-") or "unknown"
+        idx_suffix = f"_{index + 1}" if index > 0 else ""
+        return f"{mode}_{date_part}_{ms_part}_{safe_model}_{size}_{quality}{idx_suffix}.{ext}"
+
     @staticmethod
     def save(image_bytes: bytes, path: Union[str, Path]) -> Path:
         """保存图片到本地"""
