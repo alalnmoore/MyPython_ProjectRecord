@@ -34,7 +34,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union, Dict, Any, Iterable, Callable, TypeVar
+from typing import List, Optional, Union, Dict, Any, Iterable, Callable, TypeVar, Tuple
 
 import requests
 
@@ -65,6 +65,49 @@ _ANSI = {
 def _now_str() -> str:
     """返回当前墙钟时间,精确到毫秒 (HH:MM:SS.mmm)"""
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
+def effective_size_for_edit(
+    size: Optional[str],
+    auto_size: bool = True,
+) -> Optional[str]:
+    """
+    决定图生图时传给 API 的 size 字段。
+
+    OpenAI /v1/images/edits 的行为:
+        - 传 size → 用传的(强制覆盖输入图尺寸)
+        - 不传 size → 自动用第一张参考图的尺寸(原样输出)
+
+    因此:
+        - size 不为 None → 返回 size(强制覆盖)
+        - size 为 None + auto_size=True → 返回 None(不传,让 API 跟随输入图)
+        - size 为 None + auto_size=False → 返回 None(不传,让 API 自己决定)
+
+    注意:**不检测输入图尺寸**!因为即便检测出来再传回去,跟"不传" 的结果是一样的。
+    不传是 OpenAI 文档推荐的"自动跟随" 用法。
+    """
+    if size is not None:
+        return size
+    return None  # 不传 size 字段给 API,让它自己决定/跟随
+
+
+def detect_image_size(image_path: Union[str, Path]) -> Optional[str]:
+    """
+    检测本地图片的尺寸,返回 "WxH" 字符串。仅用于给用户提示,
+    不会传给 API(API 在不传 size 时会自动检测)。
+
+    返回 None 表示:Pillow 未装 / 文件不存在 / 读图失败。
+    """
+    try:
+        from PIL import Image  # type: ignore
+        p = Path(image_path)
+        if not p.exists():
+            return None
+        with Image.open(p) as im:
+            w, h = im.size
+        return f"{w}x{h}"
+    except (ImportError, Exception):
+        return None
 
 
 def _call_with_progress(label: str, func: Callable[..., T], *args, **kwargs) -> T:
@@ -292,11 +335,12 @@ class GPTImageClient:
         image_paths: List[Union[str, Path]],
         model: str = "gpt-image-2",
         mask_path: Optional[Union[str, Path]] = None,
-        size: str = "1024x1024",
+        size: Optional[str] = None,
         quality: str = "medium",
         output_format: str = "png",
         n: int = 1,
         show_progress: bool = True,
+        auto_size: bool = True,
     ) -> List[bytes]:
         """
         图生图 / 参考图编辑 / 遮罩编辑。
@@ -307,8 +351,17 @@ class GPTImageClient:
                             字段名固定为 image[],多图时重复同名字段。
             mask_path:      可选 PNG 遮罩;需与第一张参考图同格式、同尺寸、
                             含 alpha 通道、< 50MB。
-            model/size/quality/output_format/n: 同 text_to_image
+            size:           输出尺寸字符串,如 "1024x1024" / "2048x2048"。
+                            默认 None 表示**跟随第一张参考图的原始分辨率**;
+                            传具体字符串时强制覆盖。
+            quality:        low / medium / high / auto
+            output_format:   png / jpeg / webp
+            n:              返回图片数量(默认 1)
             show_progress:  是否在终端显示 spinner 进度条(默认 True)
+            auto_size:      当 size=None 时,是否自动跟随第一张参考图尺寸(默认 True)。
+                            True  = 检测第一张图 → 不传 size 字段给 API
+                                    (OpenAI 会按第一张图尺寸输出)
+                            False = 不传 size 字段,完全由 OpenAI 决定
 
         返回:
             List[bytes]:每张图片的二进制内容
@@ -316,17 +369,32 @@ class GPTImageClient:
         if not image_paths:
             raise ValueError("image_paths 至少包含一张")
 
+        # 决定实际传给 API 的 size(注意:不传 size 字段就是"自动跟随"信号)
+        effective_size = effective_size_for_edit(size, auto_size)
+        if size is not None:
+            print(f"   ℹ️  输出尺寸:{effective_size}(手动指定)")
+        elif auto_size:
+            detected = detect_image_size(image_paths[0])
+            if detected:
+                print(f"   ℹ️  输出尺寸:{detected}(自动跟随第一张参考图)")
+            else:
+                print(f"   ℹ️  输出尺寸:由 API 自动决定(Pillow 不可用/读图失败)")
+        else:
+            print(f"   ℹ️  输出尺寸:由 API 自动决定")
+
         url = f"{self.base_url}/v1/images/edits"
 
         # 准备 multipart/form-data 的 data 和 files
-        form_data = {
+        # size=None 时不传该字段,让 OpenAI 自动用第一张图尺寸
+        form_data: Dict[str, str] = {
             "model": model,
             "prompt": prompt,
-            "size": size,
             "quality": quality,
             "output_format": output_format,
             "n": str(n),
         }
+        if effective_size is not None:
+            form_data["size"] = effective_size
 
         def _do_request() -> List[bytes]:
             files: list = []
@@ -424,6 +492,26 @@ class GPTImageClient:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(image_bytes)
         return p
+
+    @staticmethod
+    def detect_image_size(image_path: Union[str, Path]) -> Optional[Tuple[int, int]]:
+        """
+        检测本地图片的宽高,返回 (width, height) 元组。
+
+        与模块级同名的区别:这个返回元组(便于格式化提示),
+        模块级 detect_image_size() 返回 "WxH" 字符串(便于 API 调用)。
+
+        返回 None 表示:Pillow 未装 / 文件不存在 / 读图失败。
+        """
+        try:
+            from PIL import Image  # type: ignore
+            p = Path(image_path)
+            if not p.exists():
+                return None
+            with Image.open(p) as im:
+                return im.size  # (width, height)
+        except Exception:
+            return None
 
     @staticmethod
     def list_local_images(directory: Union[str, Path],

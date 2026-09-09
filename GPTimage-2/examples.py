@@ -200,8 +200,44 @@ def image_to_image_flow():
         print("❌ 提示词不能为空")
         return
 
-    size_label = _pick("选择尺寸", list(SIZE_PRESETS.keys()), default_idx=0)
-    size = SIZE_PRESETS[size_label]
+    # ---- 根据参考图张数切换交互 ----
+    # 单张:自动解析尺寸 → 用户可选覆盖;质量 + 张数还是要问
+    # 多张:强制三件套(尺寸 / 质量 / 张数)全部走菜单
+    if len(chosen) == 1:
+        only_img = chosen[0]
+        detected = GPTImageClient.detect_image_size(only_img)
+        if detected is None:
+            print(f"⚠️  无法自动解析 {only_img.name} 的尺寸,需要手动输入")
+            size_label = _pick("选择尺寸", list(SIZE_PRESETS.keys()), default_idx=0)
+            size = SIZE_PRESETS[size_label]
+            print(f"   ℹ️  输出尺寸: {size} (手动选择)")
+        else:
+            w, h = detected
+            print(f"   ℹ️  检测到首张参考图尺寸: {w}x{h}")
+            override = input(
+                f"是否自定义输出尺寸? 输入 'y' 后按要求填写,任意其他键 = 跟随 {w}x{h} [N]: "
+            ).strip().lower()
+            if override == "y":
+                custom = _prompt(
+                    f"输出尺寸(回车 = 跟随 {w}x{h},或输入如 2048x2048)", f"{w}x{h}"
+                ).strip()
+                import re as _re
+                if _re.fullmatch(r"\d{2,5}x\d{2,5}", custom):
+                    size = custom
+                    print(f"   ℹ️  输出尺寸: {size} (手动指定)")
+                else:
+                    print("⚠️  尺寸格式不对,改回自动跟随")
+                    size = f"{w}x{h}"
+                    print(f"   ℹ️  输出尺寸: {size} (自动跟随)")
+            else:
+                size = f"{w}x{h}"
+                print(f"   ℹ️  输出尺寸: {size} (自动跟随)")
+    else:
+        # 多张参考图:强制走菜单三件套
+        print(f"   ℹ️  多张参考图({len(chosen)} 张),需手动选择输出尺寸 / 质量 / 张数")
+        size_label = _pick("选择尺寸", list(SIZE_PRESETS.keys()), default_idx=0)
+        size = SIZE_PRESETS[size_label]
+
     quality = _pick("选择质量", QUALITY_PRESETS, default_idx=1)
     output_format = _pick("输出格式", FORMAT_PRESETS, default_idx=0)
     n = int(_prompt("生成张数 n", "1") or "1")
